@@ -1,2 +1,7 @@
 packages/core/migration/**/snapshot.json linguist-generated
 packages/core/src/database/migration.gen.ts linguist-generated
+
+# understudy upstream-sync strategy: our README fully replaces upstream's.
+# The sync workflow enables `git config merge.ours.driver true` so upstream
+# README churn (badges, translations) never conflicts — git keeps ours.
+README.md merge=ours

@@ -1,0 +1,73 @@
+name: build
+
+# Builds understudy binaries. Identity (name, bin path, XDG dirs, baked
+# Worklyn config) is applied at BUILD TIME by script/understudy-transform.sh —
+# the committed tree stays near-identical to upstream.
+#
+# Matrix starts small (darwin-arm64 + linux-x64); grow it as distribution
+# needs grow (build.ts supports musl/baseline/windows targets).
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: darwin-arm64
+          - os: ubuntu-latest
+            target: linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply build-time identity
+        run: bash script/understudy-transform.sh
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # upstream pins bun via the root package.json "packageManager" field
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        # --no-frozen-lockfile: the transform renames the "opencode" workspace
+        # package to "understudy", so the committed bun.lock can't be frozen.
+        run: bun install --no-frozen-lockfile
+
+      - name: Build ${{ matrix.target }}
+        # --single: native target for this runner (matrix picks the runner).
+        # --skip-embed-web-ui: CLI-only distribution for v1.
+        # build.ts smoke-tests the produced binary (--version) itself.
+        run: bun run packages/opencode/script/build.ts --single --skip-embed-web-ui
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: understudy-${{ matrix.target }}
+          path: packages/opencode/dist/understudy-*/bin/*
+          if-no-files-found: error
+
+      - name: Upload to GitHub release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd packages/opencode/dist
+          for d in understudy-*/; do
+            name="${d%/}"
+            tar -czf "${name}.tar.gz" -C "${d}bin" .
+          done
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "understudy $GITHUB_REF_NAME" || true
+          gh release upload "$GITHUB_REF_NAME" ./*.tar.gz --clobber
+
+      # TODO(F5 — yangu/roadmap/codebender-fork.md): Azure Blob distribution —
+      # `az storage blob upload-batch` to store/understudy/releases/<version>/
+      # + latest/manifest.json (version, sha256s, urls) using AZURE_DEPLOY_SAS.

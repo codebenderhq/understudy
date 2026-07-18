@@ -1,0 +1,62 @@
+name: sync
+
+# Weekly merge of upstream anomalyco/opencode dev into a sync branch + PR.
+# NEVER pushes main directly — a human reviews and merges the PR.
+# Conflicts fail the job loudly; they should only ever touch the tiny
+# committed patch set (README is auto-resolved via merge=ours).
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "understudy-sync[bot]"
+          git config user.email "team@worklyn.com"
+          # honor `README.md merge=ours` in .gitattributes
+          git config merge.ours.driver true
+
+      - name: Merge upstream/dev
+        id: merge
+        run: |
+          git remote add upstream https://github.com/anomalyco/opencode
+          git fetch upstream dev
+          BRANCH="sync/upstream-$(date -u +%Y-%m-%d)"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          git checkout -b "$BRANCH"
+          BEFORE=$(git rev-parse HEAD)
+          git merge --no-edit upstream/dev
+          if [ "$(git rev-parse HEAD)" = "$BEFORE" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Already up to date with upstream/dev."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Assert transform anchors still hold
+        run: bash script/understudy-transform.sh --check-only
+
+      - name: Push branch + open PR
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git push origin "${{ steps.merge.outputs.branch }}"
+          gh pr create \
+            --base main \
+            --head "${{ steps.merge.outputs.branch }}" \
+            --title "sync: upstream dev $(date -u +%Y-%m-%d)" \
+            --body "Weekly merge of upstream [anomalyco/opencode](https://github.com/anomalyco/opencode) \`dev\`. Transform anchor assertions passed. Review and merge by hand — never auto-merged."
