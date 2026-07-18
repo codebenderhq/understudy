@@ -121,6 +121,19 @@ if [[ "$FAILED" == "1" ]]; then
   echo "understudy-transform: one or more anchors drifted. Fix the anchors (and transforms) before building." >&2
   exit 1
 fi
+# Anchors for the apply-only sections below (they run after the
+# check-only exit, so drift must be caught here).
+assert_count "packages/opencode/script/build.ts" ': allTargets' 1 'build.ts target list (cross-compile filter)'
+for _ch in prod beta dev; do
+  if [[ ! -d "assets/icons/$_ch" ]]; then
+    echo "FATAL: assets/icons/$_ch missing (run script/generate-icons.py)" >&2; FAILED=1
+  fi
+  if [[ ! -d "packages/desktop/icons/$_ch" ]]; then
+    echo "FATAL: upstream moved packages/desktop/icons/$_ch" >&2; FAILED=1
+  fi
+done
+if [[ "$FAILED" == "1" ]]; then exit 1; fi
+
 echo "understudy-transform: all anchors OK"
 
 if [[ "$CHECK_ONLY" == "1" ]]; then
@@ -228,5 +241,5 @@ echo "understudy-transform: icons applied"
 # UNDERSTUDY_ONLY_ARCH select exactly one plain target (no baseline/abi
 # variants). No-ops when the envs are unset.
 BUILDTS="packages/opencode/script/build.ts"
-assert_count "$BUILDTS" ': allTargets' 1
+assert_count "$BUILDTS" ': allTargets' 1 'build.ts target list (cross-compile filter)'
 replace_fixed "$BUILDTS" ': allTargets' ': allTargets.filter((t) => !process.env.UNDERSTUDY_ONLY_OS || (t.os === process.env.UNDERSTUDY_ONLY_OS && t.arch === (process.env.UNDERSTUDY_ONLY_ARCH || t.arch) && t.avx2 !== false && t.abi === undefined))'
