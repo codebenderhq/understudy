@@ -1,6 +1,13 @@
 # understudy
 
-The coding agent Worklyn's understudy clients use to maintain their apps.
+Your understudy, in the terminal.
+
+It studies your apps the way an understudy studies a lead role — then keeps
+them performing: fixes, changes, and upkeep, handled with care while you
+focus on the work only you can do. You are the lead. It never takes your
+stage.
+
+Built by [Worklyn](https://worklyn.com) for its understudy clients.
 
 ## Install
 
