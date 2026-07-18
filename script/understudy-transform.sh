@@ -79,14 +79,36 @@ assert_count "$BUILD" 'entrypoints: ["./src/index.ts",'        1 'build.ts entry
 assert_count "$GLOBAL" 'const app = "opencode"'                1 'global.ts XDG app name'
 assert_count "$INDEX" '.scriptName("opencode")'                1 'index.ts yargs scriptName'
 assert_count "$ATTENTION" 'const DEFAULT_TITLE = "opencode"'   1 'attention.ts terminal title'
+# Unauthenticated UX: fallback apiKey sentinel + branded guidance strings
+PROVIDER=packages/opencode/src/provider/provider.ts
+PROVERR=packages/opencode/src/provider/error.ts
+CLIERR=packages/opencode/src/cli/error.ts
+ACPSVC=packages/opencode/src/acp/service.ts
+TUICMD=packages/opencode/src/cli/cmd/tui.ts
+LOGO=packages/tui/src/logo.ts
+assert_count "$PROVIDER" 'if (options["apiKey"] === undefined && provider.key) options["apiKey"] = provider.key' 1 'provider.ts stored-key fallback (sentinel insert point)'
+assert_count "$PROVERR" 'opencode auth login'                  1 'provider/error.ts auth guidance string'
+assert_count "$CLIERR" 'opencode auth login'                   1 'cli/error.ts auth guidance string'
+assert_count "$CLIERR" 'opencode models'                       1 'cli/error.ts models guidance string'
+assert_count "$ACPSVC" 'opencode auth login'                   1 'acp/service.ts auth guidance string'
+assert_count "$TUICMD" 'describe: "start opencode tui"'        1 'tui.ts command description'
+assert_count "$LOGO" 'export const logo = {'                   1 'logo.ts logo export'
+assert_count "$LOGO" 'export const marks = "_^~,"'             1 'logo.ts marks contract'
+# presentation.ts embeds its OWN copy of the wordmark + an `opencode -s` hint
+PRESENT=packages/tui/src/util/presentation.ts
+OC_LEFT='  left: ["                   ", "█▀▀█ █▀▀█ █▀▀█ █▀▀▄", "█__█ █__█ █^^^ █__█", "▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀~~▀"],'
+OC_RIGHT='  right: ["             ▄     ", "█▀▀▀ █▀▀█ █▀▀█ █▀▀█", "█___ █__█ █__█ █^^^", "▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"],'
+assert_count "$LOGO"    "$OC_LEFT"  1 'logo.ts upstream left rows'
+assert_count "$LOGO"    "$OC_RIGHT" 1 'logo.ts upstream right rows'
+assert_count "$PRESENT" "$OC_LEFT"  1 'presentation.ts embedded left rows'
+assert_count "$PRESENT" "$OC_RIGHT" 1 'presentation.ts embedded right rows'
+assert_count "$PRESENT" 'opencode -s ' 1 'presentation.ts session continue hint'
 # Baked-config env hooks must still exist upstream:
 assert_count packages/core/src/flag/flag.ts 'OPENCODE_CONFIG_CONTENT: process.env["OPENCODE_CONFIG_CONTENT"]' 1 'flag.ts OPENCODE_CONFIG_CONTENT hook'
 assert_count packages/core/src/flag/flag.ts 'OPENCODE_DISABLE_MODELS_FETCH: truthy("OPENCODE_DISABLE_MODELS_FETCH")' 1 'flag.ts OPENCODE_DISABLE_MODELS_FETCH hook'
 assert_count packages/core/src/flag/flag.ts 'OPENCODE_DISABLE_AUTOUPDATE: truthy("OPENCODE_DISABLE_AUTOUPDATE")' 1 'flag.ts OPENCODE_DISABLE_AUTOUPDATE hook'
 
-# TODO: packages/tui/src/logo.ts is block-drawn ASCII art ("opencode") — not
-# trivially seddable to "understudy". Replace with a proper understudy logo
-# later; the terminal title + scriptName already say understudy.
+# (logo.ts is fully replaced in the transforms below — see "TUI logo".)
 
 # --- Desktop (Electron) anchors ---------------------------------------------
 DESKPKG=packages/desktop/package.json
@@ -162,6 +184,40 @@ replace_fixed "$INDEX" '.scriptName("opencode")' '.scriptName("understudy")'
 
 # terminal title
 replace_fixed "$ATTENTION" 'const DEFAULT_TITLE = "opencode"' 'const DEFAULT_TITLE = "understudy"'
+
+# ── Unauthenticated UX ──────────────────────────────────────────────────────
+# Without stored credentials the @ai-sdk/anthropic SDK throws a raw
+# "Anthropic API key is missing… ANTHROPIC_API_KEY" — off-brand and wrong
+# guidance. Fix: fall back to a sentinel key for the pinned worklyn provider
+# so the request reaches the Worklyn proxy, which answers 401 with branded,
+# server-controlled guidance ("run \`understudy auth login\`") on every
+# surface (run, TUI, ACP). Stored auth still wins: the sentinel only applies
+# when both config apiKey and the auth store are empty.
+replace_fixed "$PROVIDER" \
+  'if (options["apiKey"] === undefined && provider.key) options["apiKey"] = provider.key' \
+  'if (options["apiKey"] === undefined && provider.key) options["apiKey"] = provider.key
+        if (options["apiKey"] === undefined && model.providerID === "worklyn") options["apiKey"] = "unauthenticated"'
+
+# branded guidance strings (scriptName sed does not reach these literals)
+replace_fixed "$PROVERR" 'opencode auth login' 'understudy auth login'
+replace_fixed "$CLIERR"  'opencode auth login' 'understudy auth login'
+replace_fixed "$CLIERR"  'opencode models'     'understudy models'
+replace_fixed "$ACPSVC"  'opencode auth login' 'understudy auth login'
+
+# tui command description in --help
+replace_fixed "$TUICMD" 'describe: "start opencode tui"' 'describe: "start understudy tui"'
+
+# ── TUI logo: "under" / "study" in the same block font as upstream ─────────
+# Same row contract: 4 rows (row 0 = ascenders for d/t), marks glyphs
+# ("_^~,") map to texture in the renderers. Applied to BOTH copies of the
+# wordmark: packages/tui/src/logo.ts and the embedded one in presentation.ts.
+UDY_LEFT='  left: ["             ▄          ", "█__█ █▀▀▄ █▀▀█ █▀▀█ █▀▀▀", "█__█ █__█ █__█ █^^^ █___", "▀▀▀▀ ▀~~▀ ▀▀▀▀ ▀▀▀▀ ▀___"],'
+UDY_RIGHT='  right: ["      ▄           ▄     ", "█▀▀▀ ▀█▀▀ █__█ █▀▀█ █__█", "▀▀▀█ _█__ █__█ █__█ ▀▀~█", "▀▀▀▀ _▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"],'
+replace_fixed "$LOGO"    "$OC_LEFT"  "$UDY_LEFT"
+replace_fixed "$LOGO"    "$OC_RIGHT" "$UDY_RIGHT"
+replace_fixed "$PRESENT" "$OC_LEFT"  "$UDY_LEFT"
+replace_fixed "$PRESENT" "$OC_RIGHT" "$UDY_RIGHT"
+replace_fixed "$PRESENT" 'opencode -s ' 'understudy -s '
 
 # wrapper entrypoint: bakes the pinned Worklyn config before importing the CLI
 cat > packages/opencode/src/index.understudy.ts <<EOF
