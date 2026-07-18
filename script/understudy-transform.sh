@@ -54,7 +54,11 @@ replace_fixed() {
 # Anthropic wire format → bomba's /v1/messages; bomba maps x-api-key→Bearer
 # and enforces tier model access server-side.
 # ---------------------------------------------------------------------------
-BAKED_CONFIG_JSON='{"enabled_providers":["worklyn"],"model":"worklyn/claude-sonnet-5","small_model":"worklyn/claude-sonnet-5","provider":{"worklyn":{"name":"Worklyn","npm":"@ai-sdk/anthropic","options":{"baseURL":"https://worklyn.me/v1"},"models":{"claude-sonnet-5":{"name":"Understudy (Sonnet 5)","limit":{"context":200000,"output":32000},"tool_call":true},"claude-opus-4-8":{"name":"Understudy Max (Opus 4.8)","limit":{"context":200000,"output":32000},"tool_call":true}}}},"share":"disabled","autoupdate":false}'
+# SINGLE model by design: the user is never offered a model choice —
+# no picker entries to switch between, no other providers (whitelist +
+# models.dev fetch disabled). Capability differences are enforced by the
+# Worklyn proxy per billing tier, not by a client-side menu.
+BAKED_CONFIG_JSON='{"enabled_providers":["worklyn"],"model":"worklyn/claude-sonnet-5","small_model":"worklyn/claude-sonnet-5","provider":{"worklyn":{"name":"Worklyn","npm":"@ai-sdk/anthropic","options":{"baseURL":"https://worklyn.me/v1"},"models":{"claude-sonnet-5":{"name":"Understudy","limit":{"context":200000,"output":32000},"tool_call":true}}}},"share":"disabled","autoupdate":false}'
 
 # ---------------------------------------------------------------------------
 # 1. Anchor assertions (always run)
@@ -170,9 +174,9 @@ jq '.name = "@understudy/desktop" | .author.name = "Understudy"' "$DESKPKG" > "$
 mv "$DESKPKG.tmp" "$DESKPKG"
 
 # appIds per channel
-replace_fixed "$DESKCFG" 'dev: "ai.opencode.desktop.dev"'   'dev: "me.worklyn.understudy.dev"'
-replace_fixed "$DESKCFG" 'beta: "ai.opencode.desktop.beta"' 'beta: "me.worklyn.understudy.beta"'
-replace_fixed "$DESKCFG" 'prod: "ai.opencode.desktop"'      'prod: "me.worklyn.understudy"'
+replace_fixed "$DESKCFG" 'dev: "ai.opencode.desktop.dev"'   'dev: "worklyn.understudy.dev"'
+replace_fixed "$DESKCFG" 'beta: "ai.opencode.desktop.beta"' 'beta: "worklyn.understudy.beta"'
+replace_fixed "$DESKCFG" 'prod: "ai.opencode.desktop"'      'prod: "worklyn.understudy"'
 # (linux executableName + StartupWMClass derive from the appId variable, so
 # they follow automatically.)
 
