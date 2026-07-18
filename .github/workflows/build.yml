@@ -1,11 +1,23 @@
 name: build
 
-# Builds understudy binaries. Identity (name, bin path, XDG dirs, baked
-# Worklyn config) is applied at BUILD TIME by script/understudy-transform.sh —
-# the committed tree stays near-identical to upstream.
+# Builds understudy CLI binaries + the Electron desktop app and uploads
+# everything to Azure Blob (store/understudy/). Identity (name, bin path, XDG
+# dirs, appId, productName, updater feed, baked Worklyn config) is applied at
+# BUILD TIME by script/understudy-transform.sh — the committed tree stays
+# near-identical to upstream.
 #
-# Matrix starts small (darwin-arm64 + linux-x64); grow it as distribution
-# needs grow (build.ts supports musl/baseline/windows targets).
+# Layout on the blob (container "store", account "worklynstore"):
+#   understudy/releases/<version>/   CLI archives + desktop installers +
+#                                    blockmaps + manifest.json (immutable)
+#   understudy/latest/               electron-updater latest*.yml + installers
+#                                    + manifest.json (tags only, short cache)
+#
+# Desktop builds are UNSIGNED/ad-hoc for now (no Apple/Windows identities —
+# roadmap F11): CSC_IDENTITY_AUTO_DISCOVERY=false, notarize/dmg-sign disabled
+# by the transform. Windows is deferred.
+#
+# Auth: repo secret AZURE_STORAGE_SAS — a container-scoped SAS token string
+# (racwl) for container "store" on account "worklynstore".
 
 on:
   workflow_dispatch:
@@ -15,8 +27,28 @@ on:
 permissions:
   contents: write
 
+env:
+  BLOB_BASE: https://worklynstore.blob.core.windows.net/store/understudy
+
 jobs:
-  build:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - id: v
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-ci.${GITHUB_RUN_NUMBER}.${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            echo "release=" >> "$GITHUB_OUTPUT"
+          fi
+
+  cli:
+    needs: version
     strategy:
       fail-fast: false
       matrix:
@@ -47,16 +79,19 @@ jobs:
         # --skip-embed-web-ui: CLI-only distribution for v1.
         # build.ts smoke-tests the produced binary (--version) itself.
         run: bun run packages/opencode/script/build.ts --single --skip-embed-web-ui
+        env:
+          OPENCODE_VERSION: ${{ needs.version.outputs.version }}
+          OPENCODE_CHANNEL: prod
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: understudy-${{ matrix.target }}
+          name: understudy-cli-${{ matrix.target }}
           path: packages/opencode/dist/understudy-*/bin/*
           if-no-files-found: error
 
       - name: Upload to GitHub release (tags only)
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: needs.version.outputs.release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -68,6 +103,168 @@ jobs:
           gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "understudy $GITHUB_REF_NAME" || true
           gh release upload "$GITHUB_REF_NAME" ./*.tar.gz --clobber
 
-      # TODO(F5 — yangu/roadmap/codebender-fork.md): Azure Blob distribution —
-      # `az storage blob upload-batch` to store/understudy/releases/<version>/
-      # + latest/manifest.json (version, sha256s, urls) using AZURE_DEPLOY_SAS.
+  desktop:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: mac-arm64
+            platform_flag: --mac --arm64
+          - os: ubuntu-latest
+            target: linux-x64
+            platform_flag: --linux
+          # windows deferred: no signing identity + no cert decision yet (F11)
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply build-time identity
+        run: bash script/understudy-transform.sh
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install --no-frozen-lockfile
+
+      - name: Install rpm (ubuntu only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends rpm
+
+      - name: Prepare
+        # copies channel icons/metainfo, builds the embedded CLI server bundle
+        # (packages/opencode/dist/node), stamps the version into package.json
+        run: bun ./scripts/prepare.ts
+        working-directory: packages/desktop
+        env:
+          OPENCODE_VERSION: ${{ needs.version.outputs.version }}
+          OPENCODE_CHANNEL: prod
+
+      - name: Build
+        run: bun run build
+        working-directory: packages/desktop
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+          OPENCODE_CHANNEL: prod
+
+      - name: Package (unsigned)
+        run: npx electron-builder ${{ matrix.platform_flag }} --publish never --config electron-builder.config.ts
+        working-directory: packages/desktop
+        timeout-minutes: 60
+        env:
+          OPENCODE_CHANNEL: prod
+          # no Apple/Windows identities yet (F11): ad-hoc/unsigned builds
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: understudy-desktop-${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            packages/desktop/dist/*.dmg
+            packages/desktop/dist/*.zip
+            packages/desktop/dist/*.blockmap
+            packages/desktop/dist/*.AppImage
+            packages/desktop/dist/*.deb
+            packages/desktop/dist/*.rpm
+            packages/desktop/dist/latest*.yml
+
+  upload:
+    needs: [version, cli, desktop]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      AZURE_STORAGE_SAS: ${{ secrets.AZURE_STORAGE_SAS }}
+    steps:
+      - name: Assert SAS secret present
+        run: |
+          if [[ -z "$AZURE_STORAGE_SAS" ]]; then
+            echo "FATAL: AZURE_STORAGE_SAS repo secret is not set (container-scoped SAS for 'store' on 'worklynstore')" >&2
+            exit 1
+          fi
+
+      - name: Download CLI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: understudy-cli-*
+          path: work/cli
+          merge-multiple: true
+
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: understudy-desktop-*
+          path: work/desktop
+          merge-multiple: true
+
+      - name: Assemble release tree + manifest
+        run: |
+          set -euo pipefail
+          REL="stage/releases/$VERSION"
+          LATEST="stage/latest"
+          mkdir -p "$REL" "$LATEST"
+
+          # CLI archives: understudy-<os>-<arch>.{zip,tar.gz}
+          for d in work/cli/understudy-*/; do
+            name=$(basename "$d")
+            if [[ "$name" == *darwin* ]]; then
+              (cd "$d/bin" && zip -r "$GITHUB_WORKSPACE/$REL/$name.zip" .)
+            else
+              tar -czf "$REL/$name.tar.gz" -C "$d/bin" .
+            fi
+          done
+
+          # Desktop installers + blockmaps → releases/<version>/
+          find work/desktop -maxdepth 1 -type f \
+            \( -name '*.dmg' -o -name '*.zip' -o -name '*.blockmap' \
+               -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) \
+            -exec cp {} "$REL/" \;
+
+          # electron-updater feeds + the installers they reference → latest/
+          # (generic provider resolves file URLs relative to the feed URL, so
+          # latest/ must be self-contained)
+          cp work/desktop/latest*.yml "$LATEST/"
+          find work/desktop -maxdepth 1 -type f \
+            \( -name '*.dmg' -o -name '*.zip' -o -name '*.blockmap' -o -name '*.AppImage' \) \
+            -exec cp {} "$LATEST/" \;
+
+          # manifest.json: {version, files: {name: {sha256, size, url}}}
+          manifest=$(jq -n --arg version "$VERSION" '{version: $version, files: {}}')
+          for f in "$REL"/*; do
+            name=$(basename "$f")
+            sha=$(sha256sum "$f" | cut -d' ' -f1)
+            size=$(stat -c%s "$f")
+            url="$BLOB_BASE/releases/$VERSION/$name"
+            manifest=$(jq --arg n "$name" --arg s "$sha" --argjson z "$size" --arg u "$url" \
+              '.files[$n] = {sha256: $s, size: $z, url: $u}' <<<"$manifest")
+          done
+          echo "$manifest" > "$REL/manifest.json"
+          echo "$manifest" > "$LATEST/manifest.json"
+          echo "$manifest"
+
+      - name: Upload releases/${{ needs.version.outputs.version }} (immutable, long cache)
+        run: |
+          az storage blob upload-batch \
+            --account-name worklynstore \
+            --sas-token "$AZURE_STORAGE_SAS" \
+            --destination store \
+            --destination-path "understudy/releases/$VERSION" \
+            --source "stage/releases/$VERSION" \
+            --content-cache-control "public, max-age=31536000, immutable" \
+            --overwrite
+
+      - name: Upload latest/ (updater feed, short cache — tags only)
+        if: needs.version.outputs.release
+        run: |
+          az storage blob upload-batch \
+            --account-name worklynstore \
+            --sas-token "$AZURE_STORAGE_SAS" \
+            --destination store \
+            --destination-path "understudy/latest" \
+            --source "stage/latest" \
+            --content-cache-control "public, max-age=300" \
+            --overwrite

@@ -84,6 +84,35 @@ assert_count packages/core/src/flag/flag.ts 'OPENCODE_DISABLE_AUTOUPDATE: truthy
 # trivially seddable to "understudy". Replace with a proper understudy logo
 # later; the terminal title + scriptName already say understudy.
 
+# --- Desktop (Electron) anchors ---------------------------------------------
+DESKPKG=packages/desktop/package.json
+DESKCFG=packages/desktop/electron-builder.config.ts
+
+assert_count "$DESKPKG" '"name": "@opencode-ai/desktop"'  1 'desktop package.json name'
+assert_count "$DESKPKG" '"name": "OpenCode"'               1 'desktop package.json author.name (electron-builder company name)'
+assert_count "$DESKCFG" 'dev: "ai.opencode.desktop.dev"'   1 'electron-builder APP_IDS.dev'
+assert_count "$DESKCFG" 'beta: "ai.opencode.desktop.beta"' 1 'electron-builder APP_IDS.beta'
+assert_count "$DESKCFG" 'prod: "ai.opencode.desktop"'      1 'electron-builder APP_IDS.prod'
+assert_count "$DESKCFG" 'artifactName: "opencode-desktop-${os}-${arch}.${ext}"' 1 'electron-builder artifactName'
+assert_count "$DESKCFG" 'productName: "OpenCode Dev"'      1 'electron-builder dev productName'
+assert_count "$DESKCFG" 'productName: "OpenCode Beta"'     1 'electron-builder beta productName'
+assert_count "$DESKCFG" 'productName: "OpenCode",'         1 'electron-builder prod productName'
+assert_count "$DESKCFG" 'name: "OpenCode",'                2 'electron-builder protocol display names (base + prod)'
+assert_count "$DESKCFG" 'name: "OpenCode Beta"'            1 'electron-builder beta protocol display name'
+assert_count "$DESKCFG" 'publish: { provider: "github", owner: "anomalyco", repo: "opencode-beta", channel: "latest" }' 1 'electron-builder beta publish target'
+assert_count "$DESKCFG" 'publish: { provider: "github", owner: "anomalyco", repo: "opencode", channel: "latest" }'      1 'electron-builder prod publish target'
+assert_count "$DESKCFG" 'notarize: true'                   1 'electron-builder mac notarize flag'
+assert_count "$DESKCFG" 'sign: true'                       1 'electron-builder dmg sign flag'
+assert_count "$DESKCFG" 'fpm: [legacyDesktopEntryFpm]'     2 'electron-builder prod deb/rpm legacy desktop entry'
+assert_count "$DESKCFG" 'packageName: "opencode-dev"'      1 'electron-builder dev rpm packageName'
+assert_count "$DESKCFG" 'packageName: "opencode-beta"'     1 'electron-builder beta rpm packageName'
+assert_count "$DESKCFG" 'packageName: "opencode",'         1 'electron-builder prod rpm packageName'
+
+# TODO: packages/desktop/icons/{dev,beta,prod} are upstream's OpenCode icons —
+# ship them as-is for now (no hand-drawn art); replace with understudy icons
+# when we have real assets. NOTE: the opencode:// deep-link scheme is left
+# untouched (internal, like OPENCODE_* env vars — renaming breaks app code).
+
 if [[ "$FAILED" == "1" ]]; then
   echo "understudy-transform: one or more anchors drifted. Fix the anchors (and transforms) before building." >&2
   exit 1
@@ -130,5 +159,49 @@ EOF
 
 # point the build at the wrapper
 replace_fixed "$BUILD" 'entrypoints: ["./src/index.ts",' 'entrypoints: ["./src/index.understudy.ts",'
+
+# ---------------------------------------------------------------------------
+# 3. Desktop (Electron) identity
+# ---------------------------------------------------------------------------
+
+# package.json: workspace name + author.name (electron-builder uses author as
+# the company/maintainer identity).
+jq '.name = "@understudy/desktop" | .author.name = "Understudy"' "$DESKPKG" > "$DESKPKG.tmp"
+mv "$DESKPKG.tmp" "$DESKPKG"
+
+# appIds per channel
+replace_fixed "$DESKCFG" 'dev: "ai.opencode.desktop.dev"'   'dev: "me.worklyn.understudy.dev"'
+replace_fixed "$DESKCFG" 'beta: "ai.opencode.desktop.beta"' 'beta: "me.worklyn.understudy.beta"'
+replace_fixed "$DESKCFG" 'prod: "ai.opencode.desktop"'      'prod: "me.worklyn.understudy"'
+# (linux executableName + StartupWMClass derive from the appId variable, so
+# they follow automatically.)
+
+# installer/updater artifact names
+replace_fixed "$DESKCFG" 'artifactName: "opencode-desktop-${os}-${arch}.${ext}"' 'artifactName: "understudy-desktop-${os}-${arch}.${ext}"'
+
+# product + protocol display names (the opencode:// scheme itself stays)
+replace_fixed "$DESKCFG" 'productName: "OpenCode Dev"'  'productName: "Understudy Dev"'
+replace_fixed "$DESKCFG" 'productName: "OpenCode Beta"' 'productName: "Understudy Beta"'
+replace_fixed "$DESKCFG" 'productName: "OpenCode",'     'productName: "Understudy",'
+replace_fixed "$DESKCFG" 'name: "OpenCode",'            'name: "Understudy",'
+replace_fixed "$DESKCFG" 'name: "OpenCode Beta"'        'name: "Understudy Beta"'
+
+# electron-updater feed: generic provider against Azure Blob. Both channels
+# point at the same feed for now — only prod is built in CI.
+UNDERSTUDY_FEED='publish: { provider: "generic", url: "https://worklynstore.blob.core.windows.net/store/understudy/latest", channel: "latest" }'
+replace_fixed "$DESKCFG" 'publish: { provider: "github", owner: "anomalyco", repo: "opencode-beta", channel: "latest" }' "$UNDERSTUDY_FEED"
+replace_fixed "$DESKCFG" 'publish: { provider: "github", owner: "anomalyco", repo: "opencode", channel: "latest" }'      "$UNDERSTUDY_FEED"
+
+# unsigned/ad-hoc builds until we have signing identities (roadmap F11):
+# no notarization, no dmg signing (CI also sets CSC_IDENTITY_AUTO_DISCOVERY=false).
+replace_fixed "$DESKCFG" 'notarize: true' 'notarize: false'
+replace_fixed "$DESKCFG" 'sign: true'     'sign: false'
+
+# linux package identity: don't collide with upstream's opencode packages, and
+# drop the opencode-desktop legacy launcher shim (meaningless for a fresh fork).
+replace_fixed "$DESKCFG" 'packageName: "opencode-dev"'  'packageName: "understudy-dev"'
+replace_fixed "$DESKCFG" 'packageName: "opencode-beta"' 'packageName: "understudy-beta"'
+replace_fixed "$DESKCFG" 'packageName: "opencode",'     'packageName: "understudy",'
+replace_fixed "$DESKCFG" 'fpm: [legacyDesktopEntryFpm]' 'fpm: []'
 
 echo "understudy-transform: transforms applied"
