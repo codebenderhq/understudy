@@ -55,8 +55,17 @@ jobs:
         include:
           - os: macos-14
             target: darwin-arm64
+            build_flags: "--single"
           - os: ubuntu-latest
             target: linux-x64
+            build_flags: "--single"
+          # windows CLI: bun cross-compiles bun-windows-x64 from linux;
+          # build.ts's smoke test is platform-guarded so it skips here.
+          - os: ubuntu-latest
+            target: windows-x64
+            build_flags: ""
+            only_os: win32
+            only_arch: x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -78,10 +87,12 @@ jobs:
         # --single: native target for this runner (matrix picks the runner).
         # --skip-embed-web-ui: CLI-only distribution for v1.
         # build.ts smoke-tests the produced binary (--version) itself.
-        run: bun run packages/opencode/script/build.ts --single --skip-embed-web-ui
+        run: bun run packages/opencode/script/build.ts ${{ matrix.build_flags }} --skip-embed-web-ui
         env:
           OPENCODE_VERSION: ${{ needs.version.outputs.version }}
           OPENCODE_CHANNEL: prod
+          UNDERSTUDY_ONLY_OS: ${{ matrix.only_os || '' }}
+          UNDERSTUDY_ONLY_ARCH: ${{ matrix.only_arch || '' }}
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
@@ -211,7 +222,7 @@ jobs:
           # CLI archives: understudy-<os>-<arch>.{zip,tar.gz}
           for d in work/cli/understudy-*/; do
             name=$(basename "$d")
-            if [[ "$name" == *darwin* ]]; then
+            if [[ "$name" == *darwin* || "$name" == *windows* ]]; then
               (cd "$d/bin" && zip -r "$GITHUB_WORKSPACE/$REL/$name.zip" .)
             else
               tar -czf "$REL/$name.tar.gz" -C "$d/bin" .

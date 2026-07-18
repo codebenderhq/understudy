@@ -221,3 +221,12 @@ for channel in prod beta dev; do
   cp -R "assets/icons/$channel/." "packages/desktop/icons/$channel/"
 done
 echo "understudy-transform: icons applied"
+
+# ── Cross-compile target filter ───────────────────────────────────────────
+# build.ts only offers --single (native) or ALL targets. CI's windows leg
+# cross-compiles from linux, so add an env filter: UNDERSTUDY_ONLY_OS /
+# UNDERSTUDY_ONLY_ARCH select exactly one plain target (no baseline/abi
+# variants). No-ops when the envs are unset.
+BUILDTS="packages/opencode/script/build.ts"
+assert_count "$BUILDTS" ': allTargets' 1
+replace_fixed "$BUILDTS" ': allTargets' ': allTargets.filter((t) => !process.env.UNDERSTUDY_ONLY_OS || (t.os === process.env.UNDERSTUDY_ONLY_OS && t.arch === (process.env.UNDERSTUDY_ONLY_ARCH || t.arch) && t.avx2 !== false && t.abi === undefined))'
