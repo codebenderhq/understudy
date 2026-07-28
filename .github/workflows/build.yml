@@ -66,6 +66,12 @@ jobs:
             build_flags: ""
             only_os: win32
             only_arch: x64
+          - os: ubuntu-latest
+            target: windows-x64-baseline
+            build_flags: ""
+            only_os: win32
+            only_arch: x64
+            only_baseline: "1"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -93,6 +99,7 @@ jobs:
           OPENCODE_CHANNEL: prod
           UNDERSTUDY_ONLY_OS: ${{ matrix.only_os || '' }}
           UNDERSTUDY_ONLY_ARCH: ${{ matrix.only_arch || '' }}
+          UNDERSTUDY_ONLY_BASELINE: ${{ matrix.only_baseline || '' }}
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
@@ -113,6 +120,22 @@ jobs:
           done
           gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "understudy $GITHUB_REF_NAME" || true
           gh release upload "$GITHUB_REF_NAME" ./*.tar.gz --clobber
+
+  windows-smoke:
+    needs: cli
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: understudy-cli-windows-x64*
+          path: work
+
+      - name: Run Windows binaries
+        shell: pwsh
+        run: |
+          $bins = Get-ChildItem work -Recurse -Filter understudy.exe
+          if ($bins.Count -ne 2) { throw "expected AVX2 + baseline binaries, found $($bins.Count)" }
+          foreach ($bin in $bins) { & $bin.FullName --version }
 
   desktop:
     needs: version
@@ -185,7 +208,7 @@ jobs:
             packages/desktop/dist/latest*.yml
 
   upload:
-    needs: [version, cli, desktop]
+    needs: [version, cli, windows-smoke, desktop]
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.version.outputs.version }}

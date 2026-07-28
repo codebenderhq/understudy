@@ -305,9 +305,8 @@ echo "understudy-transform: icons applied"
 
 # ── Cross-compile target filter ───────────────────────────────────────────
 # build.ts only offers --single (native) or ALL targets. CI's windows leg
-# cross-compiles from linux, so add an env filter: UNDERSTUDY_ONLY_OS /
-# UNDERSTUDY_ONLY_ARCH select exactly one plain target (no baseline/abi
-# variants). No-ops when the envs are unset.
+# cross-compiles from linux, so env filters select one target. Windows builds
+# both AVX2 and baseline binaries; other targets remain plain.
 BUILDTS="packages/opencode/script/build.ts"
 assert_count "$BUILDTS" ': allTargets' 1 'build.ts target list (cross-compile filter)'
-replace_fixed "$BUILDTS" ': allTargets' ': allTargets.filter((t) => !process.env.UNDERSTUDY_ONLY_OS || (t.os === process.env.UNDERSTUDY_ONLY_OS && t.arch === (process.env.UNDERSTUDY_ONLY_ARCH || t.arch) && t.avx2 !== false && t.abi === undefined))'
+replace_fixed "$BUILDTS" ': allTargets' ': allTargets.filter((t) => !process.env.UNDERSTUDY_ONLY_OS || (t.os === process.env.UNDERSTUDY_ONLY_OS && t.arch === (process.env.UNDERSTUDY_ONLY_ARCH || t.arch) && (process.env.UNDERSTUDY_ONLY_BASELINE ? t.avx2 === false : t.avx2 !== false) && t.abi === undefined))'
