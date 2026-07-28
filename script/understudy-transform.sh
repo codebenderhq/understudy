@@ -58,7 +58,15 @@ replace_fixed() {
 # no picker entries to switch between, no other providers (whitelist +
 # models.dev fetch disabled). Capability differences are enforced by the
 # Worklyn proxy per billing tier, not by a client-side menu.
-BAKED_CONFIG_JSON='{"enabled_providers":["worklyn"],"model":"worklyn/claude-sonnet-5","small_model":"worklyn/claude-sonnet-5","provider":{"worklyn":{"name":"Worklyn","npm":"@ai-sdk/anthropic","options":{"baseURL":"https://worklyn.me/v1"},"models":{"claude-sonnet-5":{"name":"Understudy","limit":{"context":200000,"output":32000},"tool_call":true}}}},"share":"disabled","autoupdate":false}'
+# Model id is the PRODUCT id, never a vendor id. bomba canonicalises it via
+# shared/models/catalog.js for tier gating and rewrites it to the real
+# deployment before forwarding (maskUpstreamModel), so the client never
+# learns the upstream and repointing the product is a server-side catalog
+# edit. The TUI shows models[id].name, falling back to the id itself
+# (packages/tui/src/util/model.ts) — both are neutral here by construction.
+# This is only the FLOOR: once a user runs `understudy auth login <origin>`,
+# /.well-known/opencode pushes the live config over it (bomba/wellknown.ts).
+BAKED_CONFIG_JSON='{"enabled_providers":["worklyn"],"model":"worklyn/understudy-default","small_model":"worklyn/understudy-default","provider":{"worklyn":{"name":"Worklyn","npm":"@ai-sdk/anthropic","options":{"baseURL":"https://worklyn.me/v1"},"models":{"understudy-default":{"name":"Understudy","limit":{"context":200000,"output":32000},"tool_call":true}}}},"share":"disabled","autoupdate":false}'
 
 # ---------------------------------------------------------------------------
 # 1. Anchor assertions (always run)
@@ -75,7 +83,11 @@ assert_count "$PKG" '"opencode": "./bin/opencode"'             1 'package.json b
 assert_count "$WEBPKG" '"opencode": "workspace:*"'             1 'web package.json workspace dep on the renamed package'
 assert_count "$BUILD" 'bin/opencode'                           2 'build.ts compiled binary path (outfile + smoke test)'
 assert_count "$BUILD" '--user-agent=opencode/'                 1 'build.ts user-agent execArgv'
-assert_count "$BUILD" 'entrypoints: ["./src/index.ts",'        1 'build.ts entrypoints declaration'
+# Anchored on the entrypoint PATH, not the surrounding formatting: upstream
+# reflowed this array onto multiple lines (2026-07-20) and renamed the sibling
+# worker vars, which broke a whitespace-sensitive anchor. The quoted path is
+# the semantic thing we care about and appears exactly once.
+assert_count "$BUILD" '"./src/index.ts",'                      1 'build.ts CLI entrypoint path'
 assert_count "$GLOBAL" 'const app = "opencode"'                1 'global.ts XDG app name'
 assert_count "$INDEX" '.scriptName("opencode")'                1 'index.ts yargs scriptName'
 assert_count "$ATTENTION" 'const DEFAULT_TITLE = "opencode"'   1 'attention.ts terminal title'
@@ -231,7 +243,7 @@ await import("./index.ts")
 EOF
 
 # point the build at the wrapper
-replace_fixed "$BUILD" 'entrypoints: ["./src/index.ts",' 'entrypoints: ["./src/index.understudy.ts",'
+replace_fixed "$BUILD" '"./src/index.ts",' '"./src/index.understudy.ts",'
 
 # ---------------------------------------------------------------------------
 # 3. Desktop (Electron) identity
