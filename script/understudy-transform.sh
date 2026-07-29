@@ -66,7 +66,7 @@ replace_fixed() {
 # (packages/tui/src/util/model.ts) — both are neutral here by construction.
 # This is only the FLOOR: once a user runs `understudy auth login <origin>`,
 # /.well-known/opencode pushes the live config over it (bomba/wellknown.ts).
-BAKED_CONFIG_JSON='{"enabled_providers":["worklyn"],"model":"worklyn/understudy-default","small_model":"worklyn/understudy-default","provider":{"worklyn":{"name":"Worklyn","npm":"@ai-sdk/anthropic","options":{"baseURL":"https://worklyn.me/v1"},"models":{"understudy-default":{"name":"Understudy","limit":{"context":200000,"output":32000},"tool_call":true}}}},"share":"disabled","autoupdate":false}'
+BAKED_CONFIG_JSON='{"enabled_providers":["worklyn"],"model":"worklyn/understudy-default","small_model":"worklyn/understudy-default","provider":{"worklyn":{"name":"Worklyn","npm":"@ai-sdk/anthropic","options":{"baseURL":"https://worklyn.me/v1"},"models":{"understudy-default":{"name":"Understudy","limit":{"context":200000,"output":32000},"tool_call":true}}}},"share":"disabled","autoupdate":true}'
 
 # ---------------------------------------------------------------------------
 # 1. Anchor assertions (always run)
@@ -158,6 +158,16 @@ fi
 # Anchors for the apply-only sections below (they run after the
 # check-only exit, so drift must be caught here).
 assert_count "packages/opencode/script/build.ts" ': allTargets' 1 'build.ts target list (cross-compile filter)'
+# Self-update (F18): every upstream update source must still be where we
+# repoint it, or stale binaries would check the WRONG product's releases.
+INSTALLTS=packages/opencode/src/installation/index.ts
+assert_count "$INSTALLTS" 'if (process.execPath.includes(path.join(".opencode", "bin"))) return "curl" as Method' 1 'installation method() curl detection'
+assert_count "$INSTALLTS" 'https://api.github.com/repos/anomalyco/opencode/releases/latest' 1 'installation latest() github fallback URL'
+assert_count "$INSTALLTS" 'const data = yield* HttpClientResponse.schemaBodyJson(GitHubRelease)(response)' 1 'installation latest() github schema decode'
+assert_count "$INSTALLTS" 'return data.tag_name.replace(/^v/, "")' 1 'installation latest() tag_name return'
+assert_count "$INSTALLTS" 'HttpClientRequest.get("https://opencode.ai/install")' 1 'installation upgradeCurl script URL'
+assert_count "$INSTALLTS" 'const shell = yield* upgradeScriptShell()' 1 'installation upgradeCurl shell pick'
+assert_count "$INSTALLTS" 'ChildProcess.make(shell, [], {' 1 'installation upgradeCurl spawn args'
 for _ch in prod beta dev; do
   if [[ ! -d "assets/icons/$_ch" ]]; then
     echo "FATAL: assets/icons/$_ch missing (run script/generate-icons.py)" >&2; FAILED=1
@@ -238,7 +248,7 @@ cat > packages/opencode/src/index.understudy.ts <<EOF
 // eagerly-evaluated Flag module) loads. \`??=\` keeps every env overridable.
 process.env["OPENCODE_CONFIG_CONTENT"] ??= JSON.stringify($BAKED_CONFIG_JSON)
 process.env["OPENCODE_DISABLE_MODELS_FETCH"] ??= "1"
-process.env["OPENCODE_DISABLE_AUTOUPDATE"] ??= "1"
+process.env["OPENCODE_DISABLE_AUTOUPDATE"] ??= "0"
 await import("./index.ts")
 EOF
 
@@ -302,6 +312,36 @@ for channel in prod beta dev; do
   cp -R "assets/icons/$channel/." "packages/desktop/icons/$channel/"
 done
 echo "understudy-transform: icons applied"
+
+# ── Self-update via the Worklyn feed (F18) ─────────────────────────────────
+# Repoint the updater's whole chain at our distribution: install dir
+# detection, version source (latest/manifest.json — same {version} shape as
+# NpmPackage), and the upgrade script (sh on mac/linux, install.ps1 piped to
+# powershell on Windows; the installer renames a locked exe so in-place
+# upgrade works from inside a running session).
+replace_fixed "$INSTALLTS" \
+  'if (process.execPath.includes(path.join(".opencode", "bin"))) return "curl" as Method' \
+  'if (process.execPath.includes(path.join(".understudy", "bin"))) return "curl" as Method
+        if (process.execPath.includes(path.join(".opencode", "bin"))) return "curl" as Method'
+replace_fixed "$INSTALLTS" \
+  'https://api.github.com/repos/anomalyco/opencode/releases/latest' \
+  'https://worklyn.com/understudy/latest/manifest.json'
+replace_fixed "$INSTALLTS" \
+  'const data = yield* HttpClientResponse.schemaBodyJson(GitHubRelease)(response)' \
+  'const data = yield* HttpClientResponse.schemaBodyJson(NpmPackage)(response)'
+replace_fixed "$INSTALLTS" \
+  'return data.tag_name.replace(/^v/, "")' \
+  'return data.version'
+replace_fixed "$INSTALLTS" \
+  'HttpClientRequest.get("https://opencode.ai/install")' \
+  'HttpClientRequest.get(process.platform === "win32" ? "https://worklyn.com/understudy/install.ps1" : "https://worklyn.com/understudy/install")'
+replace_fixed "$INSTALLTS" \
+  'const shell = yield* upgradeScriptShell()' \
+  'const shell = process.platform === "win32" ? "powershell" : yield* upgradeScriptShell()'
+replace_fixed "$INSTALLTS" \
+  'ChildProcess.make(shell, [], {' \
+  'ChildProcess.make(shell, process.platform === "win32" ? ["-NoProfile", "-Command", "-"] : [], {'
+echo "understudy-transform: self-update repointed at the Worklyn feed"
 
 # ── Cross-compile target filter ───────────────────────────────────────────
 # build.ts only offers --single (native) or ALL targets. CI's windows leg
