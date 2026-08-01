@@ -79,11 +79,27 @@ jobs:
       - name: Push branch + open PR
         if: steps.merge.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          # A PAT when one is configured, else the workflow token. Dropping a
+          # SYNC_PAT into repo secrets makes PR creation start working with no
+          # further edit to this file.
+          GH_TOKEN: ${{ secrets.SYNC_PAT || github.token }}
+          BRANCH: ${{ steps.merge.outputs.branch }}
         run: |
-          git push origin "${{ steps.merge.outputs.branch }}"
-          gh pr create \
+          git push origin "$BRANCH"
+
+          # The merge, the anchor assertions and the push above ARE the work of
+          # this job, and all of them have succeeded by the time we get here.
+          # GITHUB_TOKEN cannot open the PR in this org: createPullRequest comes
+          # back "Resource not accessible by integration" even with
+          # pull-requests: write and with both the org and the repo set to allow
+          # Actions to create pull requests — so the restriction sits above us
+          # (enterprise policy). Failing the job here would paint a green sync
+          # red and bury the fact that the branch is already pushed and ready.
+          # Warn with a one-click link instead.
+          if ! gh pr create \
             --base main \
-            --head "${{ steps.merge.outputs.branch }}" \
+            --head "$BRANCH" \
             --title "sync: upstream dev $(date -u +%Y-%m-%d)" \
-            --body "Weekly merge of upstream [anomalyco/opencode](https://github.com/anomalyco/opencode) \`dev\`. Transform anchor assertions passed. Review and merge by hand — never auto-merged."
+            --body "Weekly merge of upstream [anomalyco/opencode](https://github.com/anomalyco/opencode) \`dev\`. Transform anchor assertions passed. Review and merge by hand — never auto-merged."; then
+            echo "::warning::Upstream merged and pushed to $BRANCH, but PR creation was refused. Open it here: https://github.com/$GITHUB_REPOSITORY/compare/main...$BRANCH?expand=1"
+          fi
