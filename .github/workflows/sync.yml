@@ -38,7 +38,34 @@ jobs:
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
           git checkout -b "$BRANCH"
           BEFORE=$(git rev-parse HEAD)
-          git merge --no-edit upstream/dev
+
+          # The fork replaces upstream's CI: every workflow except build.yml
+          # and sync.yml is deleted here on purpose (upstream's are gated on
+          # `github.repository == 'anomalyco/opencode'` and could never run
+          # for us). Upstream edits those files constantly, and each edit
+          # arrives as a modify/delete conflict — which is why no sync had
+          # ever completed. `merge=ours` cannot help: git never invokes a
+          # merge driver for modify/delete.
+          #
+          # Keep our deletion for exactly that path, and nothing else. Any
+          # other conflict is real and still stops the job for a human.
+          if ! git merge --no-edit upstream/dev; then
+            UNRESOLVED=""
+            for f in $(git diff --name-only --diff-filter=U); do
+              if [ "${f#.github/workflows/}" != "$f" ] && ! git cat-file -e "HEAD:$f" 2>/dev/null; then
+                git rm -q -f "$f"
+                echo "  kept our deletion: $f"
+              else
+                UNRESOLVED="$UNRESOLVED $f"
+              fi
+            done
+            if [ -n "$UNRESOLVED" ]; then
+              echo "::error::conflicts that need a human:$UNRESOLVED"
+              exit 1
+            fi
+            git commit --no-edit
+          fi
+
           if [ "$(git rev-parse HEAD)" = "$BEFORE" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "Already up to date with upstream/dev."
