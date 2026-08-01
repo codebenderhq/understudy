@@ -141,7 +141,7 @@ assert_count "$DESKCFG" 'publish: { provider: "github", owner: "anomalyco", repo
 assert_count "$DESKCFG" 'publish: { provider: "github", owner: "anomalyco", repo: "opencode", channel: "latest" }'      1 'electron-builder prod publish target'
 assert_count "$DESKCFG" 'notarize: true'                   1 'electron-builder mac notarize flag'
 assert_count "$DESKCFG" 'sign: true'                       1 'electron-builder dmg sign flag'
-assert_count "$DESKCFG" 'fpm: [legacyDesktopEntryFpm]'     2 'electron-builder prod deb/rpm legacy desktop entry'
+assert_count "$DESKCFG" 'fpm: [metainfoFpm(appId), legacyDesktopEntryFpm]' 2 'electron-builder prod deb/rpm extra fpm entries'
 assert_count "$DESKCFG" 'packageName: "opencode-dev"'      1 'electron-builder dev rpm packageName'
 assert_count "$DESKCFG" 'packageName: "opencode-beta"'     1 'electron-builder beta rpm packageName'
 assert_count "$DESKCFG" 'packageName: "opencode",'         1 'electron-builder prod rpm packageName'
@@ -297,7 +297,15 @@ replace_fixed "$DESKCFG" 'sign: true'     'sign: false'
 replace_fixed "$DESKCFG" 'packageName: "opencode-dev"'  'packageName: "understudy-dev"'
 replace_fixed "$DESKCFG" 'packageName: "opencode-beta"' 'packageName: "understudy-beta"'
 replace_fixed "$DESKCFG" 'packageName: "opencode",'     'packageName: "understudy",'
-replace_fixed "$DESKCFG" 'fpm: [legacyDesktopEntryFpm]' 'fpm: []'
+# Upstream ships two extra fpm payloads on the prod deb/rpm: its legacy
+# opencode-desktop .desktop entry, and (added 2026-07) an appstream metainfo
+# file resolved as resources/<appId>.metainfo.xml. We want neither. The
+# legacy entry is opencode's, and metainfoFpm would resolve against our
+# rebranded appId to resources/worklyn.understudy.metainfo.xml, which does
+# not exist — fpm would fail on the missing file. Strip the array, which is
+# what this produced before upstream added metainfo.
+# (dev/beta keep metainfoFpm upstream-side; we only ever build prod.)
+replace_fixed "$DESKCFG" 'fpm: [metainfoFpm(appId), legacyDesktopEntryFpm]' 'fpm: []'
 
 echo "understudy-transform: transforms applied"
 
