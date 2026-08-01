@@ -85,7 +85,13 @@ jobs:
           GH_TOKEN: ${{ secrets.SYNC_PAT || github.token }}
           BRANCH: ${{ steps.merge.outputs.branch }}
         run: |
-          git push origin "$BRANCH"
+          # Re-dispatching sync on the same day rebuilds the merge commit onto a
+          # branch that already exists (the name is date-only), which git rejects
+          # as non-fast-forward. The branch is machine-generated and disposable,
+          # so update it; fetch first so --force-with-lease still guards against
+          # anything pushed to it during this run.
+          git fetch origin "$BRANCH" 2>/dev/null || true
+          git push --force-with-lease origin "$BRANCH"
 
           # The merge, the anchor assertions and the push above ARE the work of
           # this job, and all of them have succeeded by the time we get here.
@@ -96,10 +102,17 @@ jobs:
           # (enterprise policy). Failing the job here would paint a green sync
           # red and bury the fact that the branch is already pushed and ready.
           # Warn with a one-click link instead.
-          if ! gh pr create \
-            --base main \
-            --head "$BRANCH" \
-            --title "sync: upstream dev $(date -u +%Y-%m-%d)" \
-            --body "Weekly merge of upstream [anomalyco/opencode](https://github.com/anomalyco/opencode) \`dev\`. Transform anchor assertions passed. Review and merge by hand — never auto-merged."; then
+          # REST, not `gh pr create`. That command goes through the GraphQL
+          # createPullRequest mutation, which refuses a fine-grained PAT
+          # ("Resource not accessible by personal access token") even when the
+          # token holds pull_requests=write on this repo. The REST endpoint
+          # accepts the same token and returns 201 — verified by hand against
+          # this repo before making the switch.
+          if ! gh api -X POST "repos/$GITHUB_REPOSITORY/pulls" \
+            -f base=main \
+            -f head="$BRANCH" \
+            -f title="sync: upstream dev $(date -u +%Y-%m-%d)" \
+            -f body="Weekly merge of upstream [anomalyco/opencode](https://github.com/anomalyco/opencode) \`dev\`. Transform anchor assertions passed. Review and merge by hand — never auto-merged." \
+            --jq .html_url; then
             echo "::warning::Upstream merged and pushed to $BRANCH, but PR creation was refused. Open it here: https://github.com/$GITHUB_REPOSITORY/compare/main...$BRANCH?expand=1"
           fi
