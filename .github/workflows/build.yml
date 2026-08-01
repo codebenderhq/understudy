@@ -149,7 +149,13 @@ jobs:
           - os: ubuntu-latest
             target: linux-x64
             platform_flag: --linux
-          # windows deferred: no signing identity + no cert decision yet (F11)
+          # Unsigned, like mac and linux. script/sign-windows.ps1 exits 0 when
+          # AZURE_TRUSTED_SIGNING_* is unset, so the signtoolOptions hook in
+          # electron-builder.config.ts is a no-op until a cert exists (F11) —
+          # the missing identity never blocked the build, only signing it.
+          - os: windows-latest
+            target: win-x64
+            platform_flag: --win
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -205,6 +211,7 @@ jobs:
             packages/desktop/dist/*.AppImage
             packages/desktop/dist/*.deb
             packages/desktop/dist/*.rpm
+            packages/desktop/dist/*.exe
             packages/desktop/dist/latest*.yml
 
   upload:
