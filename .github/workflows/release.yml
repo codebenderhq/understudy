@@ -1,0 +1,88 @@
+name: release
+
+# Cuts a release tag. build.yml does the rest: it fires on `push: tags: v*`,
+# builds the CLI + desktop matrix and publishes to the blob, including the
+# `latest/` feed that installed clients self-update from.
+#
+# Tagging is deliberately a separate, human-triggered step rather than
+# something that fires on every merge to main. A tag ships to every installed
+# CLI and desktop app via self-update, and main tracks upstream opencode — a
+# sync can land 200+ commits we have not run. Automating the mechanics is
+# worth it; automating the decision is not.
+#
+# The tag is pushed with SYNC_PAT, NOT GITHUB_TOKEN. A tag pushed by the
+# workflow token cannot trigger another workflow (GitHub blocks that to avoid
+# recursive runs), so build.yml would never fire and the release would be a
+# tag with no artifacts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: patch or minor (ignored when `version` is set)
+        required: false
+        default: patch
+        type: choice
+        options: [patch, minor]
+      version:
+        description: exact version to cut, without the leading v (e.g. 0.2.0-beta)
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute the next version
+        id: v
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version }}" ]; then
+            NEXT="v${{ inputs.version }}"
+          else
+            LATEST=$(git tag -l 'v*-beta' --sort=-v:refname | head -1)
+            [ -n "$LATEST" ] || { echo "::error::no v*-beta tag to bump from"; exit 1; }
+            BASE=${LATEST#v}; BASE=${BASE%-beta}
+            IFS=. read -r MA MI PA <<< "$BASE"
+            case "${{ inputs.bump }}" in
+              minor) MI=$((MI + 1)); PA=0 ;;
+              *)     PA=$((PA + 1)) ;;
+            esac
+            NEXT="v${MA}.${MI}.${PA}-beta"
+            echo "  latest: $LATEST -> next: $NEXT"
+          fi
+
+          if git rev-parse -q --verify "refs/tags/$NEXT" >/dev/null; then
+            echo "::error::$NEXT already exists"; exit 1
+          fi
+
+          # Nothing new since the last tag means the build would republish an
+          # identical tree under a new version and push installed clients an
+          # update that changes nothing.
+          PREV=$(git tag -l 'v*-beta' --sort=-v:refname | head -1)
+          if [ -n "$PREV" ] && [ "$(git rev-parse "$PREV^{commit}")" = "$(git rev-parse HEAD)" ]; then
+            echo "::error::HEAD is already released as $PREV — nothing to cut"; exit 1
+          fi
+
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and push
+        env:
+          # Must be the PAT: a tag pushed with GITHUB_TOKEN will not trigger
+          # build.yml, leaving a release tag with no artifacts behind it.
+          TOKEN: ${{ secrets.SYNC_PAT }}
+          NEXT: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          [ -n "$TOKEN" ] || { echo "::error::SYNC_PAT is not set — see the note above"; exit 1; }
+          git config user.name "understudy-release[bot]"
+          git config user.email "team@worklyn.com"
+          git tag -a "$NEXT" -m "$NEXT"
+          git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}" "$NEXT"
+          echo "::notice::cut $NEXT — build.yml is now publishing it to the latest/ feed"
