@@ -10,10 +10,15 @@ name: release
 # sync can land 200+ commits we have not run. Automating the mechanics is
 # worth it; automating the decision is not.
 #
-# The tag is pushed with SYNC_PAT, NOT GITHUB_TOKEN. A tag pushed by the
-# workflow token cannot trigger another workflow (GitHub blocks that to avoid
-# recursive runs), so build.yml would never fire and the release would be a
-# tag with no artifacts.
+# The tag must be pushed as SYNC_PAT, NOT GITHUB_TOKEN: GitHub blocks a tag
+# pushed by the workflow token from triggering another workflow, so build.yml
+# would never fire and the release would be a tag with no artifacts behind it.
+#
+# Passing the PAT to actions/checkout is what makes that true. Embedding it in
+# the push URL is NOT enough — checkout persists the workflow token as
+# `http.https://github.com/.extraheader`, which applies to every push to
+# github.com and overrides URL credentials. v0.1.6-beta was cut that way and
+# produced a tag with no build.
 
 on:
   workflow_dispatch:
@@ -38,6 +43,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # Persist the PAT as the credential for later pushes; see the note
+          # at the top about extraheader overriding URL credentials.
+          token: ${{ secrets.SYNC_PAT }}
 
       - name: Compute the next version
         id: v
@@ -74,15 +82,12 @@ jobs:
 
       - name: Tag and push
         env:
-          # Must be the PAT: a tag pushed with GITHUB_TOKEN will not trigger
-          # build.yml, leaving a release tag with no artifacts behind it.
-          TOKEN: ${{ secrets.SYNC_PAT }}
           NEXT: ${{ steps.v.outputs.version }}
         run: |
           set -euo pipefail
-          [ -n "$TOKEN" ] || { echo "::error::SYNC_PAT is not set — see the note above"; exit 1; }
           git config user.name "understudy-release[bot]"
           git config user.email "team@worklyn.com"
           git tag -a "$NEXT" -m "$NEXT"
-          git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}" "$NEXT"
+          # origin carries the PAT from checkout, so this push triggers build.yml
+          git push origin "$NEXT"
           echo "::notice::cut $NEXT — build.yml is now publishing it to the latest/ feed"
